@@ -87,10 +87,11 @@ class TextParser(object):
         if text[0] == '\'':
             text = text[1:]
 
-        if text[0].isdigit() and len(text) > 6:
-            for i in range(5):
-                if text[0].isdigit() or text[0] == ' ':
-                    text = text[1:]
+        if len(text) > 0:
+            if text[0].isdigit() and len(text) > 6:
+                for i in range(5):
+                    if text[0].isdigit() or text[0] == ' ':
+                        text = text[1:]
 
         chars_to_replace = [u'‘', u'’', u'"']
         for char in chars_to_replace:

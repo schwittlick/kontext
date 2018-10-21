@@ -1,5 +1,5 @@
 python 3.5.2
 
 
-workon eco_v5
+workon gdoors_py3
 pip install -r requirements.txt

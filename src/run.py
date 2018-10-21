@@ -2,13 +2,13 @@ import sys
 import argparse
 import os
 import re
+import json
 
 import textparser
+import mongo
 
 import ebooklib
 import textract
-import djvu
-import djvu.decode
 from ebooklib import epub
 
 
@@ -51,36 +51,6 @@ def parse_epub(absolute_path):
     return all_text
 
 
-def print_text(sexpr, level=0):
-    if level > 0:
-        print(' ' * (2 * level - 1), end=' ')
-    if isinstance(sexpr, djvu.sexpr.ListExpression):
-        if len(sexpr) == 0:
-            return
-        print(str(sexpr[0].value), [sexpr[i].value for i in range(1, 5)])
-        for child in sexpr[5:]:
-            print_text(child, level + 1)
-    else:
-        print(sexpr)
-
-
-class Context(djvu.decode.Context):
-
-    def handle_message(self, message):
-        if isinstance(message, djvu.decode.ErrorMessage):
-            print(message, file=sys.stderr)
-            # Exceptions in handle_message() are ignored, so sys.exit()
-            # wouldn't work here.
-            os._exit(1)
-
-    def process(self, path):
-        document = self.new_document(djvu.decode.FileURI(path))
-        document.decoding_job.wait()
-        for page in document.pages:
-            page.get_info()
-            print_text(page.text.sexpr)
-
-
 def save_lines(outfilename, lines):
     file = open(outfilename, 'w')
     for line in lines:
@@ -104,16 +74,43 @@ def save_meta(infilename, outfilename, parser_statistics):
     file.close()
 
 
+def remove_all_files(folder):
+    files_to_delete = [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
+    for file in files_to_delete:
+        full_path_to_delete = os.path.abspath(os.path.join(folder + file))
+        os.remove(full_path_to_delete)
+
+
+def get_full_dict(text_parser, infilename, outfilename):
+    valid = []
+    for line in text_parser.valid_sentences:
+        valid.append(line.string)
+
+    faulty = []
+    for line in text_parser.faulty_sentences:
+        faulty.append(line.string)
+
+    final_dict = {}
+    final_dict['valid'] = valid
+    final_dict['faulty'] = faulty
+    final_dict['meta'] = text_parser.statistic.properties
+    final_dict['filename'] = infilename
+    return final_dict
+    #json_string = json.dumps(final_dict, ensure_ascii=False)
+    #outfile = open(outfilename, 'w')
+    #outfile.write(json_string)
+    #outfile.flush()
+    #outfile.close()
+
+
 def run(params):
     input_path = params['input_path']
     output_path = params['output_path']
 
-    files_to_delete = [f for f in os.listdir(output_path) if os.path.isfile(os.path.join(output_path, f))]
-    for file in files_to_delete:
-        full_path_to_delete = os.path.abspath(os.path.join(output_path + file))
-        os.remove(full_path_to_delete)
+    #remove_all_files(output_path)
 
     parser = textparser.TextParser()
+
     statistic_filename = os.path.abspath(os.path.join(output_path, 'statistics.txt'))
     print('Saving statistics to ' + statistic_filename)
     statistics_file = open(statistic_filename, 'w')
@@ -123,44 +120,77 @@ def run(params):
     statistics_file.write('\n')
     statistics_file.close()
 
+    mongo_wrapper = mongo.MongoConnection()
 
     files = list_dir_recursively(input_path)
     for file in files:
         print('Parsing ' + file)
-        parser = textparser.TextParser()
+        was_parsed = True
+        path_only, filename_only = os.path.split(file)
+        try:
 
-        if '.epub' in file:
-            text = parse_epub(file)
-            parser.parse(text)
+            if not mongo_wrapper.exists(file):
+                parser = textparser.TextParser()
 
-        elif '.pdf' in file:
-            text = textract.process(file).decode('utf-8')
-            parser.parse(text)
+                if '.epub' in file:
+                    try:
+                        text = parse_epub(file)
+                        parser.parse(text)
+                    except:
+                        was_parsed = False
 
-        elif '.doc' in file:
-            text = textract.process(file).decode('utf-8')
-            parser.parse(text)
+                elif '.pdf' in file or '.doc' in file:
+                    try:
+                        pr = textract.process(file)
+                        if pr:
+                            text = pr.decode('utf-8')
+                            parser.parse(text)
+                        else:
+                            was_parsed = False
+                    except:
+                        was_parsed = False
 
-        #elif '.jpg' in file:
-        #    text = textract.process(file).decode('utf-8')
-        #    parser.parse(text)
+                else:
+                    was_parsed = False
 
-        #elif '.djvu' in file:
-        #    context = Context()
-        #    context.process(file)
+                #elif '.jpg' in file:
+                #    text = textract.process(file).decode('utf-8')
+                #    parser.parse(text)
 
-        statistics_file = open(statistic_filename, 'a')
-        statistics_file.write(file)
+                #elif '.djvu' in file:
+                #    context = Context()
+                #    context.process(file)
 
-        for key, value in parser.statistic.properties.items():
-            statistics_file.write(';' + str(value))
-        statistics_file.write('\n')
-        statistics_file.close()
+                if was_parsed:
+                    if len(parser.valid_sentences) > 0:
+                        dict = get_full_dict(parser, file, os.path.join(output_path, filename_only + '_parsed.json'))
+                        mongo_wrapper.add_book(dict)
 
-        path, filename = os.path.split(file)
-        save_lines(os.path.join(output_path, filename + '_faulty.txt'), parser.faulty_sentences)
-        save_lines(os.path.join(output_path, filename + '_valid.txt'), parser.valid_sentences)
-        save_meta(file, os.path.join(output_path, filename + '_meta.txt'), parser.statistic)
+                    statistics_file = open(statistic_filename, 'a')
+                    statistics_file.write(file)
+
+                    for key, value in parser.statistic.properties.items():
+                        statistics_file.write(';' + str(value))
+                    statistics_file.write('\n')
+                    statistics_file.close()
+
+                    save_lines(os.path.join(output_path, filename_only + '_faulty.txt'), parser.faulty_sentences)
+                    save_lines(os.path.join(output_path, filename_only + '_valid.txt'), parser.valid_sentences)
+                    save_meta(file, os.path.join(output_path, filename_only + '_meta.txt'), parser.statistic)
+        except:
+            was_parsed = False
+
+        if not was_parsed:
+            _p, _f = os.path.split(file)
+            extra_path = _p[len(input_path):]
+            create_new = os.path.join(input_path[:-1] + '_failed/', extra_path) + '/'
+            print(create_new)
+            if not os.path.isdir(create_new):
+                os.makedirs(create_new)
+            print(create_new + filename_only)
+            os.rename(file, create_new + filename_only)
+
+        print(input_path)
 
 if __name__ == "__main__":
     params = process_arguments(sys.argv[1:])
