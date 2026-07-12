@@ -9,11 +9,11 @@ from ws4py import websocket
 from bottle import ServerAdapter
 from bottle import static_file
 
-from docvec import DocVec
-import runtime
-from mongo import MongoConnection
+from src_old.framework.docvec import DocVec
+import src_old.framework.runtime as runtime
+from src_old.framework.mongo import MongoConnection
 
-from tools import APP_PATH, rpc
+from src_old.framework.tools import APP_PATH, rpc
 
 kontext_app = bottle.Bottle()
 
