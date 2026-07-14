@@ -10,6 +10,9 @@ dependencies = [
     "rich>=13",
     "py3langid>=0.3",
     "datasketch>=2.0.0",
+    "torch>=2.6",
+    "sentence-transformers>=3.3",
+    "qdrant-client>=1.12",
 ]
 
 [project.scripts]
@@ -17,6 +20,16 @@ kontext = "kontext.cli:app"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+
+# torch must come from the cu126 wheel line: it still ships sm_50 kernels
+# for the titan x (maxwell). default pypi wheels target newer gpus only.
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
 
 [build-system]
 requires = ["hatchling"]

@@ -4,3 +4,6 @@ data
 *.db
 uv.lock
 *.json
+qdrant_storage
+kontext.db-shm
+kontext.db-wal

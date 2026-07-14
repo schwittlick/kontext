@@ -93,28 +93,40 @@ query → embed → qdrant hybrid query (dense + sparse, rrf fusion) → top 50
 
 pdfs have real pages, so results say "p. 217". epub/mobi have no fixed pages; results say chapter + position (e.g. "ch. 7, ~34%") and the excerpt itself is the anchor. this is a format property, not a bug — the ui just renders whichever locator the chunk carries.
 
-## installation (arch)
+## installation
+
+two machines: an arch laptop (development, small corpus) and the debian 11
+titan-x box (gpu, full 662 gb corpus at /media/marcel/drive1/books).
+python itself is managed by uv on both — the system python version never
+matters. python dependencies are handled by `uv sync`, no manual venv/pip.
+
+**arch:**
 
 ```
-sudo pacman -S uv                    # required: everything python runs through uv
-
-# optional converters -- kontext ingest uses them when present, and
-# automatically retries books that waited on them once they appear:
-sudo pacman -S calibre               # ebook-convert: mobi/azw3 -> epub
-sudo pacman -S libreoffice-fresh     # soffice: doc/rtf/odt -> txt, ppt/pptx -> pdf
-
-# phase 4 (ocr queue) will additionally need:
-sudo pacman -S ocrmypdf tesseract-data-eng djvulibre
-#   (+ tesseract-data-<lang> per corpus language; or surya-ocr via uv on
-#    the gpu machine -- decided when phase 4 is built)
-
-# phase 2 (search) on the titan-x machine:
-sudo pacman -S docker                # qdrant runs as a container
-#   pytorch/sentence-transformers come via uv sync when phase 2 lands;
-#   mind the titan-x pytorch caveat in the sizing section
+sudo pacman -S uv calibre libreoffice-fresh
+# phase 4 (ocr queue), later:  sudo pacman -S ocrmypdf tesseract-data-eng djvulibre
+# phase 2 (qdrant container):  sudo pacman -S docker
 ```
 
-python dependencies are handled by `uv sync` — no manual venv/pip.
+**debian 11 (gpu box):**
+
+```
+curl -LsSf https://astral.sh/uv/install.sh | sh     # uv is not in apt
+sudo apt install calibre libreoffice                # converters
+sudo apt install nvidia-modprobe                    # creates /dev/nvidia-uvm on demand;
+                                                    # without it cuda fails with "unknown error"
+                                                    # while nvidia-smi works fine
+# phase 4, later:  sudo apt install ocrmypdf tesseract-ocr-eng djvulibre-bin
+# phase 2:         sudo apt install docker.io       # qdrant container
+```
+
+converters are optional everywhere: `kontext ingest` uses them when present
+and automatically retries books that waited on them once they appear.
+
+**pytorch on the titan x (maxwell, sm_52):** `torch` from the cu126 wheel
+index (`https://download.pytorch.org/whl/cu126`) still ships sm_50 kernels,
+which cover the card; if cuda init fights the 12.5 driver, fall back to the
+cu124 index. verified: torch 2.13.0+cu126 lists sm_50 in its arch list.
 
 ## usage
 
@@ -125,7 +137,22 @@ uv run kontext report                    # re-render the report (no probing)
 uv run kontext ingest data               # phase 1: extract new books -> kontext.db
 uv run kontext books --search kafka      # browse the catalog
 uv run kontext show 42                   # one work: metadata, files, first blocks
+
+# phase 2: search
+docker run -d --name qdrant -p 6333:6333 \
+  -v $(pwd)/qdrant_storage:/qdrant/storage -m 2g qdrant/qdrant
+uv run kontext chunk                     # blocks -> ~300-word chunks + bm25 index
+OMP_NUM_THREADS=4 uv run kontext embed   # chunks -> qdrant (gpu if available, resumable)
+uv run kontext search "the reproduction of images changes the artwork itself"
+uv run kontext search "..." --rerank     # cross-encoder rerank: better, slower, extra model
 ```
+
+phase 2 notes: hybrid retrieval = bge-m3 dense vectors (qdrant) fused with
+bm25 (sqlite fts5 over the same chunks, rrf fusion) — fts5 replaces bge-m3's
+own sparse vectors so no flagembedding dependency is needed. `chunk` and
+`embed` are interrupt-safe like everything else. each cli `search` loads the
+model fresh (~20s on cpu); the phase-3 web app keeps it resident. first
+`embed`/`search` downloads the model (~2.3 gb) into the huggingface cache.
 
 everything is resumable and incremental: `survey` skips files whose size+mtime are unchanged, `ingest` refreshes the survey itself and then only touches files it has never extracted (by sha256). after more downloads land, just re-run `ingest`. if extractor logic changes and a clean slate is wanted: delete `kontext.db` and re-run (minutes, the dump is never touched).
 

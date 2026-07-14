@@ -59,6 +59,32 @@ CREATE TABLE IF NOT EXISTS ingest_errors (
     error  TEXT,
     at     TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS chunks (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id       INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    seq           INTEGER NOT NULL,
+    text          TEXT NOT NULL,
+    word_count    INTEGER NOT NULL,
+    chapter_idx   INTEGER,
+    chapter_title TEXT,
+    page_start    INTEGER,
+    page_end      INTEGER,
+    char_offset   INTEGER,
+    embedded      INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (book_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_embedded ON chunks(embedded);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    text, content='chunks', content_rowid='id'
+);
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
 """
 
 
@@ -151,6 +177,35 @@ def load_signatures(conn: sqlite3.Connection, min_words: int) -> list[tuple[int,
         (min_words,),
     )
     return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+
+def books_needing_chunks(conn: sqlite3.Connection) -> list[int]:
+    return [r[0] for r in conn.execute(
+        "SELECT id FROM books WHERE status='extracted' AND block_count > 0"
+        " AND id NOT IN (SELECT DISTINCT book_id FROM chunks) ORDER BY id"
+    )]
+
+
+def insert_chunks(conn: sqlite3.Connection, book_id: int, chunks: list[dict]) -> None:
+    conn.executemany(
+        "INSERT INTO chunks (book_id, seq, text, word_count, chapter_idx,"
+        " chapter_title, page_start, page_end, char_offset)"
+        " VALUES (:book_id, :seq, :text, :word_count, :chapter_idx,"
+        " :chapter_title, :page_start, :page_end, :char_offset)",
+        [{**c, "book_id": book_id} for c in chunks],
+    )
+    conn.commit()
+
+
+def unembedded_batch(conn: sqlite3.Connection, limit: int) -> list[tuple[int, str]]:
+    return [(r[0], r[1]) for r in conn.execute(
+        "SELECT id, text FROM chunks WHERE embedded=0 ORDER BY id LIMIT ?", (limit,)
+    )]
+
+
+def mark_embedded(conn: sqlite3.Connection, chunk_ids: list[int]) -> None:
+    conn.executemany("UPDATE chunks SET embedded=1 WHERE id=?", [(i,) for i in chunk_ids])
+    conn.commit()
 
 
 def iter_blocks(conn: sqlite3.Connection, book_id: int):

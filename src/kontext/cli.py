@@ -85,6 +85,112 @@ def ingest(
 
 
 @app.command()
+def chunk(
+    db: Annotated[Path, typer.Option(exists=True, dir_okay=False, help="catalog database")] = Path("kontext.db"),
+) -> None:
+    """cut extracted books into retrieval chunks + build the bm25 index (phase 2)."""
+    from rich.progress import Progress
+
+    from kontext import catalog
+    from kontext.search.chunker import chunk_book
+
+    conn = catalog.connect(db)
+    todo = catalog.books_needing_chunks(conn)
+    total = 0
+    with Progress(console=console) as progress:
+        bar = progress.add_task("chunking", total=len(todo))
+        for book_id in todo:
+            chunks = chunk_book(list(catalog.iter_blocks(conn, book_id)))
+            catalog.insert_chunks(conn, book_id, chunks)
+            total += len(chunks)
+            progress.advance(bar)
+    n = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    console.print(f"chunked {len(todo):,} books (+{total:,} chunks) | total chunks: {n:,}")
+
+
+@app.command()
+def embed(
+    db: Annotated[Path, typer.Option(exists=True, dir_okay=False, help="catalog database")] = Path("kontext.db"),
+    qdrant: Annotated[str, typer.Option(help="qdrant url")] = "http://localhost:6333",
+    batch: Annotated[int, typer.Option(min=1, help="chunks per embedding batch")] = 256,
+) -> None:
+    """embed chunks into qdrant (resumable; gpu when available) (phase 2)."""
+    from rich.progress import Progress
+
+    from kontext import catalog
+    from kontext.search.embedder import EMBED_DIM, Embedder, run_embed
+    from kontext.search.store import START_HINT, VectorStore
+
+    conn = catalog.connect(db)
+    todo = conn.execute("SELECT COUNT(*) FROM chunks WHERE embedded=0").fetchone()[0]
+    if not todo:
+        console.print("nothing to embed -- all chunks are in the index")
+        return
+    try:
+        store = VectorStore(qdrant, dim=EMBED_DIM)
+        store.ensure_collection()
+    except Exception:
+        console.print(f"[red]{START_HINT}[/red]")
+        raise typer.Exit(1)
+
+    embedder = Embedder()
+    console.print(f"embedding {todo:,} chunks on [bold]{embedder.device}[/bold] ...")
+    with Progress(console=console) as progress:
+        bar = progress.add_task("embedding", total=todo)
+        run_embed(conn, store, embedder.encode, batch=batch,
+                  on_progress=lambda n: progress.advance(bar, n))
+    console.print(f"index now holds {store.count():,} vectors")
+
+
+@app.command()
+def index(
+    db: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path("kontext.db"),
+    qdrant: Annotated[str, typer.Option(help="qdrant url")] = "http://localhost:6333",
+) -> None:
+    """chunk + embed in one go (phase 2)."""
+    chunk(db=db)
+    embed(db=db, qdrant=qdrant)
+
+
+@app.command()
+def search(
+    query: Annotated[str, typer.Argument(help="a thought, sentence or question")],
+    db: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path("kontext.db"),
+    qdrant: Annotated[str, typer.Option(help="qdrant url")] = "http://localhost:6333",
+    limit: Annotated[int, typer.Option(min=1)] = 10,
+    rerank: Annotated[bool, typer.Option(help="cross-encoder rerank (better, needs model download; fastest on gpu)")] = False,
+) -> None:
+    """find passages about an idea across the whole library (phase 2)."""
+    from kontext import catalog
+    from kontext.search import query as q
+    from kontext.search.embedder import EMBED_DIM, Embedder
+    from kontext.search.store import START_HINT, VectorStore
+
+    conn = catalog.connect(db)
+    try:
+        store = VectorStore(qdrant, dim=EMBED_DIM)
+        hits = q.search(conn, store, Embedder(), query, limit=limit, rerank=rerank)
+    except Exception as exc:
+        if "onnect" in str(exc) or "efused" in str(exc):
+            console.print(f"[red]{START_HINT}[/red]")
+            raise typer.Exit(1)
+        raise
+
+    if not hits:
+        console.print("no results -- did `kontext index` run?")
+        return
+    for i, h in enumerate(hits, 1):
+        console.print(
+            f"\n[bold]{i}. {h.title or '?'}[/bold] — {h.author or 'unknown'} "
+            f"[dim]({h.language or '?'}, {h.source_format}, {h.locator}, score {h.score:.3f})[/dim]"
+        )
+        excerpt = h.text[:400] + ("…" if len(h.text) > 400 else "")
+        console.print(f"   {excerpt}")
+        if h.path:
+            console.print(f"   [dim]{h.path}[/dim]")
+
+
+@app.command()
 def books(
     db: Annotated[Path, typer.Option(exists=True, dir_okay=False, help="catalog database")] = Path("kontext.db"),
     status: Annotated[Optional[str], typer.Option(help="filter: extracted | awaiting_ocr | needs_conversion")] = None,
