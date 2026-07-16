@@ -98,6 +98,9 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # ocr/chunk/embed may write concurrently from separate processes; wal
+    # allows it, but each writer must wait out the others' commits
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.executescript(SCHEMA)
     return conn
 
@@ -177,6 +180,43 @@ def load_signatures(conn: sqlite3.Connection, min_words: int) -> list[tuple[int,
         (min_words,),
     )
     return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+
+def books_awaiting_ocr(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """ocr queue: registered books with no text yet, plus their primary file."""
+    return conn.execute(
+        "SELECT b.id, b.title, b.author, b.language, f.path, f.format"
+        " FROM books b JOIN book_files f ON f.book_id = b.id AND f.role = 'primary'"
+        " WHERE b.status = 'awaiting_ocr' ORDER BY b.id"
+    ).fetchall()
+
+
+def finish_ocr(conn: sqlite3.Connection, book_id: int, extraction: Extraction,
+               minhash: bytes | None) -> None:
+    """attach ocr'd text to a registered book and promote it to extracted.
+
+    idempotent: status flips only here, in the same transaction as the
+    blocks, so an interrupted run redoes the book from scratch next time.
+    title/author stay as registered (survey metadata) -- ocr adds text,
+    not better metadata.
+    """
+    conn.execute("DELETE FROM blocks WHERE book_id=?", (book_id,))
+    conn.executemany(
+        "INSERT INTO blocks (book_id, seq, chapter_idx, chapter_title, page, char_offset,"
+        " word_count, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (book_id, b.seq, b.chapter_idx, b.chapter_title, b.page, b.char_offset,
+             b.word_count, b.text)
+            for b in extraction.blocks
+        ],
+    )
+    conn.execute(
+        "UPDATE books SET status='extracted', needs_ocr=0, word_count=?, block_count=?,"
+        " quality=?, language=COALESCE(?, language), minhash=?, updated_at=? WHERE id=?",
+        (extraction.word_count, len(extraction.blocks), extraction.quality,
+         extraction.language, minhash, now(), book_id),
+    )
+    conn.commit()
 
 
 def books_needing_chunks(conn: sqlite3.Connection) -> list[int]:

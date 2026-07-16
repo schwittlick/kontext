@@ -85,7 +85,7 @@ query → embed → qdrant hybrid query (dense + sparse, rrf fusion) → top 50
 
 - 20k–100k books × ~300 chunks/book → **~6m–35m passages**. `kontext survey` replaces this range with the real number.
 - 1024-dim vectors: fp32 would be 4 kb each (24–140 gb — too much), int8-quantized ~1 kb → **7–41 gb incl. hnsw graph**. qdrant keeps quantized vectors in ram and the fp32 originals on disk for rescoring. with 64 gb ram the low end is comfortable; at the 100k-book extreme it gets tight → binary quantization or on-disk vectors, both supported, no redesign.
-- bge-m3 (2.3 gb fp32) fits the 12 gb vram easily with decent batch sizes; the titan x has no tensor cores, so a conservative **~150 chunks/s** → the one-time index build is **~11 h (6m chunks) to ~3 days (35m chunks)**. ocr of the scanned share is the real long pole and lives in its own resumable queue from day one.
+- bge-m3 (2.3 gb fp32) fits the 12 gb vram easily with decent batch sizes; the titan x has no tensor cores and no fast fp16 path, and a ~570m-param model over ~450-token chunks saturates its 6.6 tflops at **~8 chunks/s (measured)** → the one-time index build is **~6 days for 4.4m chunks**. it is resumable and the index is searchable while it fills; ocr of the scanned share runs in parallel on the cpu in its own resumable queue.
 - one caveat to verify in phase 2: recent pytorch wheels dropped support for older gpu architectures — the titan x may need a pinned older pytorch/cuda build. worst case, embedding runs on cpu (slower) or the model choice shifts smaller; nothing else changes.
 - a fresh book is ~300 chunks → indexed in seconds. that is the whole "add a book" story.
 
@@ -104,7 +104,11 @@ matters. python dependencies are handled by `uv sync`, no manual venv/pip.
 
 ```
 sudo pacman -S uv calibre libreoffice-fresh
-# phase 4 (ocr queue), later:  sudo pacman -S ocrmypdf tesseract-data-eng djvulibre
+# phase 4 (ocr queue) -- tesseract + one data pack per corpus language:
+sudo pacman -S tesseract djvulibre \
+  tesseract-data-eng tesseract-data-fra tesseract-data-spa \
+  tesseract-data-chi_sim tesseract-data-deu tesseract-data-lat \
+  tesseract-data-por tesseract-data-que tesseract-data-ita tesseract-data-pol
 # phase 2 (qdrant container):  sudo pacman -S docker
 ```
 
@@ -116,7 +120,9 @@ sudo apt install calibre libreoffice                # converters
 sudo apt install nvidia-modprobe                    # creates /dev/nvidia-uvm on demand;
                                                     # without it cuda fails with "unknown error"
                                                     # while nvidia-smi works fine
-# phase 4, later:  sudo apt install ocrmypdf tesseract-ocr-eng djvulibre-bin
+# phase 4 (ocr) -- tesseract-ocr-all bundles every language pack (~1 gb),
+# covers the whole corpus incl. the 10k unknown-language books:
+sudo apt install tesseract-ocr tesseract-ocr-all djvulibre-bin
 # phase 2:         sudo apt install docker.io       # qdrant container
 ```
 
@@ -145,6 +151,10 @@ uv run kontext chunk                     # blocks -> ~300-word chunks + bm25 ind
 OMP_NUM_THREADS=4 uv run kontext embed   # chunks -> qdrant (gpu if available, resumable)
 uv run kontext search "the reproduction of images changes the artwork itself"
 uv run kontext search "..." --rerank     # cross-encoder rerank: better, slower, extra model
+
+# phase 4: ocr the scans (cpu-only; fine to run while `embed` uses the gpu)
+uv run kontext ocr                       # awaiting_ocr books -> text (tesseract, resumable)
+uv run kontext index                     # chunk + embed the newly ocr'd text
 ```
 
 phase 2 notes: hybrid retrieval = bge-m3 dense vectors (qdrant) fused with
@@ -171,7 +181,7 @@ artifacts:
   - junk embedded titles ("Dokument1", "Microsoft Word - ...") fall back to the filename.
 - **phase 2 — search core.** chunker, embedder, qdrant, and a `kontext search "..."` cli. build a golden set of ~30 query→expected-passage pairs; tune chunk size and hybrid weights against it before touching any ui.
 - **phase 3 — web app.** fastapi retrieval api + htmx ui: excerpt highlighting, locators, download endpoint, lan deployment.
-- **phase 4 — full corpus.** ocr queue for the scans, mobi/azw3/djvu conversion, watch-folder ingest, job dashboard, backups (sqlite + qdrant snapshots are tiny next to the dump itself).
+- **phase 4 — full corpus.** ocr queue ✓ implemented: `kontext ocr` works through the awaiting_ocr books (scanned pdf + djvu), one process-pool worker per book, tesseract pinned to one thread each. pages are rasterized with pymupdf (pdf) or ddjvu (djvu); a djvu's hidden text layer is used instead of re-ocr when it covers the pages. real-text pages inside scans (title, colophon) keep their pdf text. language packs are picked per book from the survey language, falling back to eng with a warning. failed books stay queued and retry next run; ocr'd books join dedup once they have text. still open: re-ocr of mixed pdfs (extracted but needs_ocr=1), watch-folder ingest, job dashboard, backups (sqlite + qdrant snapshots are tiny next to the dump itself).
 - **phase 5 — rag layer (optional, later).** llm answers with citations on top of the retrieval api — local model on the gpu or a hosted api. possibly reranker fine-tuning from own click logs. explicitly out of scope until search itself is good.
 
 ## open questions

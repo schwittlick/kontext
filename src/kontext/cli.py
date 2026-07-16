@@ -85,6 +85,30 @@ def ingest(
 
 
 @app.command()
+def ocr(
+    db: Annotated[Path, typer.Option(exists=True, dir_okay=False, help="catalog database")] = Path("kontext.db"),
+    workers: Annotated[int, typer.Option(min=1, help="parallel ocr processes (leave a core or two for anything else running)")] = _DEFAULT_WORKERS,
+    limit: Annotated[Optional[int], typer.Option(min=1, help="process only the first N queued books (trial run)")] = None,
+) -> None:
+    """ocr scanned books (pdf/djvu) into the catalog (phase 4).
+
+    cpu-only and resumable at book granularity; safe to run while `kontext
+    embed` keeps the gpu busy. failed books stay queued and are retried on
+    the next run. afterwards, `kontext index` makes the new text searchable.
+    """
+    import shutil
+
+    from kontext.ocr.runner import run_ocr
+
+    if shutil.which("tesseract") is None:
+        console.print("[red]tesseract not found -- install it plus language packs"
+                      " (e.g. `pacman -S tesseract tesseract-data-eng` /"
+                      " `apt install tesseract-ocr`)[/red]")
+        raise typer.Exit(1)
+    run_ocr(db, workers, console, limit=limit)
+
+
+@app.command()
 def chunk(
     db: Annotated[Path, typer.Option(exists=True, dir_okay=False, help="catalog database")] = Path("kontext.db"),
 ) -> None:

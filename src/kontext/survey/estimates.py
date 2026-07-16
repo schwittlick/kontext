@@ -15,7 +15,9 @@ INT8_BYTES_PER_VECTOR = EMBED_DIM          # scalar-quantized, resident in ram
 FP32_BYTES_PER_VECTOR = EMBED_DIM * 4      # originals on disk for rescoring
 HNSW_BYTES_PER_VECTOR = 150                # graph links + qdrant payload overhead
 WORDS_PER_OCR_PAGE = 300    # typical yield of an ocr'd book page
-EMBED_CHUNKS_PER_SEC = 150.0  # bge-m3, fp32, batched, on a titan x -- conservative
+EMBED_CHUNKS_PER_SEC = 8.0    # bge-m3, fp32, batched, on the titan x -- measured
+                              # 2026-07 (~570m params x ~450 tokens saturates
+                              # 6.6 tflops fp32; the old 150.0 was fantasy)
 OCR_PAGES_PER_SEC = 1.0       # surya/tesseract-class ocr on the same machine
 RAM_GB = 64
 
