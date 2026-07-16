@@ -153,7 +153,10 @@ uv run kontext search "the reproduction of images changes the artwork itself"
 uv run kontext search "..." --rerank     # cross-encoder rerank: better, slower, extra model
 
 # phase 4: ocr the scans (cpu-only; fine to run while `embed` uses the gpu)
-uv run kontext ocr                       # awaiting_ocr books -> text (tesseract, resumable)
+uv run kontext ocr --limit 20            # trial run: only the first 20 queued books
+uv run kontext ocr --workers 10          # full queue; one book per worker process
+                                         # (default: cores-1; leave 2-3 cores free
+                                         # when embed/qdrant run on the same box)
 uv run kontext index                     # chunk + embed the newly ocr'd text
 ```
 
