@@ -1,0 +1,57 @@
+# golden.yaml — the search quality yardstick.
+#
+# each case says: "for THIS query, a passage from THIS book is a right answer."
+# `kontext eval` runs every query through search and reports how often the
+# expected passage lands in the top-k (hit@k) and at what rank (mrr).
+# that turns every tuning knob — chunk size, rrf weights, rerank on/off —
+# from a vibe into a number.
+#
+# ── fields ──────────────────────────────────────────────────────────────
+#   query         (required) what you'd type into search. a thought, a
+#                 sentence, a question — the way you'd actually search.
+#   book          (required) which book holds the right answer. either a
+#                 title/author substring (case-insensitive, must be unique
+#                 enough) or a numeric book id from `kontext books`.
+#   must_contain  (optional) a SHORT verbatim quote from the target passage
+#                 — a dozen words is plenty. a result counts as correct only
+#                 if it's from `book` AND its chunk text contains this phrase.
+#                 omit it to accept any passage from the right book.
+#                 keep it short: chunks are ~300 words, so a long quote can
+#                 straddle a chunk boundary and never match (eval warns when
+#                 a phrase is unreachable in the indexed corpus).
+#   note          (optional) free text for you; eval ignores it.
+#
+# ── aim for a spread (~30 cases) ────────────────────────────────────────
+#   • paraphrase  — query shares NO words with the passage (pure dense test)
+#   • exact-term  — a name, coined term or phrase (bm25 territory)
+#   • non-english — query and book both in another language
+#   • cross-lang  — query in english, book in french/german/…
+#   • question    — the natural-language way you'd actually ask
+#
+# replace every case below with real ones against books that are indexed on
+# the machine where you'll run eval (chunked + embedded). these five are
+# only here to show the shape.
+# ─────────────────────────────────────────────────────────────────────────
+
+- query: the reproduction of an image changes the original artwork itself
+  book: mechanical reproduction        # Benjamin
+  must_contain: the aura of the work of art
+  note: paraphrase — no shared words with "aura"; a dense-retrieval test
+
+- query: cities stay safe when ordinary people are watching the street
+  book: Death and Life of Great American Cities   # Jacobs
+  must_contain: eyes upon the street
+  note: exact-term — the coined phrase "eyes on the street" is bm25 bait
+
+- query: a program's behaviour must be reproduced before it can be understood
+  book: 42                              # book id instead of a title
+  note: no must_contain — any passage from book 42 counts
+
+- query: die Verwandlung des Menschen in ein Ungeziefer am Morgen
+  book: Der Prozess                     # Kafka, de
+  note: non-english — query and book both German
+
+- query: how gardens teach patience across the turning seasons
+  book: Vita Sackville-West
+  must_contain: autumn is the season of accounting
+  note: cross-language example slot — swap for a real en-query/fr-book case

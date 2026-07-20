@@ -1,0 +1,15 @@
+<ol class="results">
+{% for r in results %}
+  <li class="card">
+    <div><span class="title">{{ r.title }}</span> <span class="author">— {{ r.author }}</span></div>
+    <div class="loc">
+      {{ r.locator }}
+      {%- if r.language %} · {{ r.language }}{% endif %}
+      {%- if r.source_format %} · {{ r.source_format }}{% endif %}
+      · score {{ '%.3f'|format(r.score) }}
+    </div>
+    <p class="excerpt">{{ r.excerpt }}</p>
+    {% if r.has_file %}<a class="dl" href="/download/{{ r.book_id }}">download original</a>{% endif %}
+  </li>
+{% endfor %}
+</ol>

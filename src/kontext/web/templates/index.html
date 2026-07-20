@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kontext{% if searched %} — {{ q }}{% endif %}</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    max-width: 46rem; margin: 0 auto; padding: 1.5rem 1rem 4rem;
+    color: #1a1a1a; background: #fafafa;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 1rem; letter-spacing: -0.01em; }
+  h1 a { color: inherit; text-decoration: none; }
+  form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  input[type=search] {
+    flex: 1 1 16rem; padding: .6rem .75rem; font-size: 1rem;
+    border: 1px solid #ccc; border-radius: .5rem; background: #fff;
+  }
+  button {
+    padding: .6rem 1.1rem; font-size: 1rem; border: 0; border-radius: .5rem;
+    background: #1a1a1a; color: #fff; cursor: pointer;
+  }
+  .rerank { font-size: .9rem; color: #555; display: flex; align-items: center; gap: .3rem; }
+  .meta { color: #666; font-size: .9rem; margin: 1.25rem 0 .5rem; }
+  .error { color: #b00020; margin: 1.25rem 0; }
+  ol.results { list-style: none; padding: 0; margin: 0; display: grid; gap: .9rem; }
+  .card { background: #fff; border: 1px solid #eaeaea; border-radius: .6rem; padding: .9rem 1rem; }
+  .card .title { font-weight: 600; }
+  .card .author { color: #555; }
+  .card .loc { color: #888; font-size: .82rem; margin-top: .15rem; }
+  .card .excerpt { margin: .55rem 0 .4rem; }
+  .card mark { background: #fff3a3; color: inherit; padding: 0 .1em; border-radius: .15em; }
+  .card .dl { font-size: .85rem; text-decoration: none; color: #0b5cad; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e6e6e6; background: #161616; }
+    input[type=search] { background: #222; border-color: #3a3a3a; color: #e6e6e6; }
+    button { background: #e6e6e6; color: #161616; }
+    .card { background: #1e1e1e; border-color: #2c2c2c; }
+    .card .author { color: #aaa; }
+    .card mark { background: #6b5d00; color: #fff; }
+    .card .dl { color: #6fb0ef; }
+  }
+</style>
+</head>
+<body>
+<h1><a href="/">kontext</a></h1>
+
+<form method="get" action="/">
+  <input type="search" name="q" value="{{ q }}"
+         placeholder="a thought, a sentence, a question…" autofocus>
+  <input type="hidden" name="limit" value="{{ limit }}">
+  <label class="rerank">
+    <input type="checkbox" name="rerank" value="true" {% if rerank %}checked{% endif %}> rerank
+  </label>
+  <button type="submit">search</button>
+</form>
+
+{% if error %}
+  <p class="error">{{ error }}</p>
+{% elif searched %}
+  {% if results %}
+    <p class="meta">{{ results|length }} passage{{ 's' if results|length != 1 else '' }} for “{{ q }}”</p>
+    {% include "results.html" %}
+  {% else %}
+    <p class="meta">no passages found for “{{ q }}”.</p>
+  {% endif %}
+{% endif %}
+</body>
+</html>

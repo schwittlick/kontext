@@ -13,6 +13,10 @@ dependencies = [
     "torch>=2.6",
     "sentence-transformers>=3.3",
     "qdrant-client>=1.12",
+    "pyyaml>=6",          # golden-set eval
+    "fastapi>=0.115",     # phase 3 web app
+    "uvicorn>=0.30",      # asgi server for `kontext serve`
+    "jinja2>=3.1",        # server-rendered ui templates
 ]
 
 [project.scripts]

@@ -214,6 +214,85 @@ def search(
             console.print(f"   [dim]{h.path}[/dim]")
 
 
+@app.command(name="eval")
+def run_eval(
+    golden: Annotated[Path, typer.Option(exists=True, dir_okay=False, help="golden set (query→passage cases)")] = Path("golden.yaml"),
+    db: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path("kontext.db"),
+    qdrant: Annotated[str, typer.Option(help="qdrant url")] = "http://localhost:6333",
+    k: Annotated[int, typer.Option(min=1, help="top-k window for hit@k")] = 10,
+    rerank: Annotated[bool, typer.Option(help="score with the cross-encoder reranker on")] = False,
+) -> None:
+    """score search against the golden set: hit@k + mrr (phase 2)."""
+    from kontext import catalog
+    from kontext.search.embedder import EMBED_DIM, Embedder
+    from kontext.search.eval import evaluate, load_golden
+    from kontext.search.store import START_HINT, VectorStore
+
+    cases = load_golden(golden)
+    if not cases:
+        console.print(f"[yellow]{golden} has no cases -- add some (see the header comments)[/yellow]")
+        raise typer.Exit(1)
+
+    conn = catalog.connect(db)
+    try:
+        store = VectorStore(qdrant, dim=EMBED_DIM)
+        console.print(f"scoring {len(cases)} cases (hit@{k}, rerank {'on' if rerank else 'off'}) ...")
+        report = evaluate(conn, store, Embedder(), cases, k=k, rerank=rerank)
+    except Exception as exc:
+        if "onnect" in str(exc) or "efused" in str(exc):
+            console.print(f"[red]{START_HINT}[/red]")
+            raise typer.Exit(1)
+        raise
+
+    t = Table(title=f"golden set — hit@{k}", title_justify="left")
+    for col, justify in [("#", "right"), ("query", "left"), ("expected", "left"), ("rank", "right")]:
+        t.add_column(col, justify=justify)
+    for i, r in enumerate(report.results, 1):
+        if r.rank is not None:
+            rank = f"[green]{r.rank}[/green]"
+        elif not r.reachable:
+            rank = "[dim]unreachable[/dim]"
+        else:
+            rank = "[red]miss[/red]"
+        t.add_row(str(i), r.case.query[:56], str(r.case.book)[:28], rank)
+    console.print(t)
+    console.print(
+        f"\n[bold]hit@{k}: {report.hits}/{report.total} ({report.hit_rate:.0%})[/bold]"
+        f"  ·  mrr: {report.mrr:.3f}"
+    )
+    if report.unreachable:
+        console.print(
+            f"[yellow]{len(report.unreachable)} case(s) unreachable[/yellow] "
+            "[dim](book not indexed, or must_contain straddles a chunk boundary) "
+            "— fix or drop them; they can't be scored:[/dim]"
+        )
+        for r in report.unreachable:
+            console.print(f"  [dim]· {r.case.query[:70]}[/dim]")
+
+
+@app.command()
+def serve(
+    db: Annotated[Path, typer.Option(exists=True, dir_okay=False, help="catalog database")] = Path("kontext.db"),
+    qdrant: Annotated[str, typer.Option(help="qdrant url")] = "http://localhost:6333",
+    host: Annotated[str, typer.Option(help="bind address (0.0.0.0 = reachable on the lan)")] = "0.0.0.0",
+    port: Annotated[int, typer.Option(min=1, help="port to listen on")] = 8000,
+) -> None:
+    """run the search web app on the lan (phase 3).
+
+    loads bge-m3 once at startup and holds it in memory, so queries are
+    sub-second instead of paying model load per cli call. open the printed
+    url from any browser on the network; no auth (home net).
+    """
+    import uvicorn
+
+    from kontext.web import create_app
+
+    application = create_app(db, qdrant)
+    console.print(f"kontext serving on [bold]http://{host}:{port}[/bold] "
+                  "[dim](loading bge-m3 on startup; first request warms it)[/dim]")
+    uvicorn.run(application, host=host, port=port)
+
+
 @app.command()
 def books(
     db: Annotated[Path, typer.Option(exists=True, dir_okay=False, help="catalog database")] = Path("kontext.db"),
